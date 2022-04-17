@@ -20,7 +20,7 @@ def build_intrinsic_mat(img: np.ndarray, focal_length: float) -> np.ndarray:
     )
 
 
-def to_cylindrical(img, focal_length: float):
+def to_cylindrical(img, focal_length: float = 800):
 
     height, width = img.shape[:2]
 
@@ -39,7 +39,9 @@ def to_cylindrical(img, focal_length: float):
     coords_map = coords_map[:, :-1] / coords_map[:, [-1]]
     coords_map = coords_map.reshape(height, width, -1)
 
-    return cv2.remap(img, coords_map[:, :, 0].astype(np.float32), coords_map[:, :, 1].astype(np.float32), cv2.INTER_AREA, borderMode=cv2.BORDER_TRANSPARENT)
+    mapped = cv2.remap(img, coords_map[:, :, 0].astype(np.float32), coords_map[:, :, 1].astype(np.float32), cv2.INTER_AREA, borderMode=cv2.BORDER_TRANSPARENT)
+
+    return mapped
 
 
 def x_blending(img: np.ndarray, start: int, end: int = -1) -> np.ndarray:
@@ -50,6 +52,9 @@ def x_blending(img: np.ndarray, start: int, end: int = -1) -> np.ndarray:
         end = width
 
     interval = end - start
+
+    if interval == 0:
+        return img
 
     start, end = min(start, end), max(start, end)
 
@@ -67,6 +72,36 @@ def x_blending(img: np.ndarray, start: int, end: int = -1) -> np.ndarray:
     img[:, :, :] *= x[np.newaxis, :, np.newaxis]
 
     return img.astype(np.uint8)
+
+
+def cylindrical_projection(img, focal_length):
+
+    height, width = img.shape[:2]
+
+    cylinder_proj = np.zeros(shape=img.shape, dtype=np.uint8)
+
+    for y in range(-int(height / 2), int(height / 2)):
+        for x in range(-int(width / 2), int(width / 2)):
+            cylinder_x = focal_length * math.atan(x / focal_length)
+            cylinder_y = focal_length * y / math.sqrt(x**2 + focal_length**2)
+
+            cylinder_x = round(cylinder_x + width / 2)
+            cylinder_y = round(cylinder_y + height / 2)
+
+            if cylinder_x >= 0 and cylinder_x < width and cylinder_y >= 0 and cylinder_y < height:
+                cylinder_proj[cylinder_y][cylinder_x] = img[y + int(height / 2)][x + int(width / 2)]
+
+    # Crop black border
+    # ref: http://stackoverflow.com/questions/13538748/crop-black-edges-with-opencv
+    if(len(img.shape) > 2):
+        _, thresh = cv2.threshold(cv2.cvtColor(cylinder_proj, cv2.COLOR_BGR2GRAY), 1, 255, cv2.THRESH_BINARY)
+    else:
+        _, thresh = cv2.threshold(cylinder_proj, 1, 255, cv2.THRESH_BINARY)
+
+    contours = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    x, y, w, h = cv2.boundingRect(contours[0][0])
+
+    return cylinder_proj[y:y + h, x:x + w]
 
 
 if __name__ == '__main__':

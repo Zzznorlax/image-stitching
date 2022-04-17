@@ -1,6 +1,6 @@
 
-from typing import List, Optional, Tuple
-from scipy.ndimage import gaussian_filter, maximum_filter
+from typing import Dict, List, Optional, Tuple
+from scipy.ndimage import gaussian_filter, maximum_filter, rotate
 
 import math
 import numpy as np
@@ -34,57 +34,76 @@ class OrientedPatch():
 
 class WaveletHashmap():
 
-    def __init__(self, patch_list: List[OrientedPatch]) -> None:
+    def __init__(self, patches: Dict[int, List[OrientedPatch]], bin_num: int = 10) -> None:
 
-        self.patch_list = patch_list
+        self.patch_count = 0
+        self.patches = {}
+        for layer_idx, layer_patches in patches.items():
+            if layer_patches:
+                self.patches[layer_idx] = layer_patches
+                self.patch_count += len(layer_patches)
 
-        self.hash_list: List[List[float]] = [list(patch.get_wavelet_hash()) for patch in self.patch_list]
+        self.hash_list: Dict[int, List[List[float]]] = {layer_idx: [list(patch.get_wavelet_hash()) for patch in patches] for layer_idx, patches in self.patches.items()}
 
-        self.upper_bounds = (max([hash[0] for hash in self.hash_list]), max([hash[1] for hash in self.hash_list]), max([hash[2] for hash in self.hash_list]))
-        self.lower_bounds = (min([hash[0] for hash in self.hash_list]), min([hash[1] for hash in self.hash_list]), min([hash[2] for hash in self.hash_list]))
+        self.steps: Dict[int, Tuple[float, float, float]] = {layer_idx: ((max([hash[0] for hash in hashes]) - min([hash[0] for hash in hashes])) / bin_num,
+                                                                         (max([hash[1] for hash in hashes]) - min([hash[1] for hash in hashes])) / bin_num,
+                                                                         (max([hash[2] for hash in hashes]) - min([hash[2] for hash in hashes])) / bin_num) for layer_idx, hashes in self.hash_list.items()}
 
-        self.steps = [(self.upper_bounds[0] - self.lower_bounds[0]) / 10, (self.upper_bounds[1] - self.lower_bounds[1]) / 10, (self.upper_bounds[2] - self.lower_bounds[2]) / 10]
+        self.lower_bounds: Dict[int, Tuple[float, float, float]] = {layer_idx: (min([hash[0] for hash in hashes]),
+                                                                                min([hash[1] for hash in hashes]),
+                                                                                min([hash[2] for hash in hashes])) for layer_idx, hashes in self.hash_list.items()}
 
-        self.hash_map = {}
+        self.hash_map: Dict[int, Dict[Tuple[float, float, float], List[int]]] = {}
 
-        for idx, patch in enumerate(self.patch_list):
-            key = self.hash_key(patch)
+        for layer_idx, patch_list in self.patches.items():
 
-            if key not in self.hash_map:
-                self.hash_map[key] = []
+            layer_hash_map = {}
+            for patch_idx, patch in enumerate(patch_list):
+                key = self.hash_key(patch, layer_idx)
 
-            self.hash_map[key].append(idx)
+                if key not in layer_hash_map:
+                    layer_hash_map[key] = []
 
-    def hash_key(self, patch: OrientedPatch) -> Tuple[int, int, int]:
+                layer_hash_map[key].append(patch_idx)
+
+            self.hash_map[layer_idx] = layer_hash_map
+
+    def hash_key(self, patch: OrientedPatch, layer: int) -> Tuple[float, float, float]:
         hash = patch.get_wavelet_hash()
 
-        return tuple(int((hash[i] - self.lower_bounds[i]) // self.steps[i]) for i in range(3))
+        return tuple(((hash[i] - self.lower_bounds[layer][i]) // self.steps[layer][i]) for i in range(3))
 
-    def match(self, patch: OrientedPatch) -> Optional[int]:
-        key = self.hash_key(patch)
+    def match(self, patch: OrientedPatch, layer: int) -> Optional[int]:
+        if layer not in self.patches:
+            return None
 
-        if key not in self.hash_map:
+        key = self.hash_key(patch, layer)
+
+        if key not in self.hash_map[layer]:
             return None
 
         match_idx = 0
-        min_err = 0
-        for idx in self.hash_map[key]:
-            patch_item = self.patch_list[idx]
-            mse = np.square(patch.patch - patch_item.patch).mean()  # type: ignore
+        min_err = inf = 1e+8
+        for idx in self.hash_map[layer][key]:
+            patch_item = self.patches[layer][idx]
+            mse = np.mean(np.square(patch.patch - patch_item.patch))
 
             if mse < min_err:
                 match_idx = idx
                 min_err = mse
 
+        if min_err == inf:
+            return None
+
         return match_idx
 
 
-def get_oriented_patches(img: np.ndarray, resp_map: np.ndarray, sigma_o: float = 4.5, sample_d: int = 5, radius: int = 20, sigma_p: float = 1) -> List[OrientedPatch]:
+def get_oriented_patches(img: np.ndarray, resp_map: np.ndarray, sigma_o: float = 4.5, sample_d: int = 5, radius: int = 20, sigma_p: float = 1, epsilon: float = 1e-8) -> List[OrientedPatch]:
 
     # Pₗ ∗ ∇σₒ(x, y)
     grad_y, grad_x = np.gradient(gaussian_filter(img, sigma=sigma_o))
 
-    length = np.sqrt(grad_x**2 + grad_y**2)
+    length = np.sqrt(grad_x**2 + grad_y**2) + epsilon
 
     grad_y /= length
     grad_x /= length
@@ -99,15 +118,18 @@ def get_oriented_patches(img: np.ndarray, resp_map: np.ndarray, sigma_o: float =
     patch_list = []
 
     for corner_idx in range(len(sample_point_loc[0])):
-        corner_pos = (sample_point_loc[0][corner_idx], sample_point_loc[1][corner_idx])
+        corner_pos = (int(sample_point_loc[0][corner_idx]), int(sample_point_loc[1][corner_idx]))
 
-        patch = smoothed[max(0, corner_pos[0] - radius):min(height, corner_pos[1] + radius), max(0, corner_pos[1] - radius):min(width, corner_pos[1] + radius)]
+        patch: np.ndarray = smoothed[max(0, corner_pos[0] - radius):min(height, corner_pos[0] + radius), max(0, corner_pos[1] - radius):min(width, corner_pos[1] + radius)]
         patch = patch[::sample_d, ::sample_d]
-        rotation_mat = cv2.getRotationMatrix2D(corner_pos, math.atan2(grad_x[corner_pos], grad_y[corner_pos]), scale=1.0)
-        rotated_patch = cv2.warpAffine(patch, rotation_mat, (patch.shape[1], patch.shape[0]))
+
+        if patch.size == 0 or patch.shape[0] != radius * 2 / sample_d or patch.shape[1] != radius * 2 / sample_d:
+            continue
+
+        rotated_patch = rotate(patch, angle=math.atan2(grad_x[corner_pos], grad_y[corner_pos]))
 
         # normalizes intensities
-        rotated_patch = (rotated_patch - np.mean(rotated_patch)) / np.var(rotated_patch)
+        rotated_patch = (rotated_patch - np.mean(rotated_patch)) / (np.var(rotated_patch) + epsilon)
 
         patch_list.append(OrientedPatch(corner_pos, rotated_patch))
 
@@ -151,43 +173,45 @@ def get_corner_resp_map(img: np.ndarray, epsilon: float = 1e-8, local_maxima_siz
 
     keypoint = det / tr
 
-    local_maxima = maximum_filter(keypoint, local_maxima_size)
+    local_maxima = keypoint * (maximum_filter(keypoint, local_maxima_size) == keypoint)
 
     local_maxima[local_maxima < minimum] = 0
 
     return local_maxima
 
 
-def match_patches(map_a: WaveletHashmap, map_b: WaveletHashmap, layer: int = 0) -> List:
+def match(map_a: WaveletHashmap, map_b: WaveletHashmap):
     mv_pairs = []
 
-    for patch in map_b.patch_list:
-        matched_idx = map_a.match(patch)
-        if matched_idx is None:
-            continue
+    for layer_idx, patches in map_b.patches.items():
+        for patch in patches:
+            matched_idx = map_a.match(patch, layer=layer_idx)
+            if matched_idx is None:
+                continue
 
-        matched_patch = map_a.patch_list[matched_idx]
+            matched_patch = map_a.patches[layer_idx][matched_idx]
 
-        y_a = matched_patch.pos[0] * (2**layer)
-        x_a = matched_patch.pos[1] * (2**layer)
+            y_a = matched_patch.pos[0] * (2**layer_idx)
+            x_a = matched_patch.pos[1] * (2**layer_idx)
 
-        y_b = patch.pos[0] * (2**layer)
-        x_b = patch.pos[1] * (2**layer)
+            y_b = patch.pos[0] * (2**layer_idx)
+            x_b = patch.pos[1] * (2**layer_idx)
 
-        mv_pairs.append([y_a, x_a, y_b, x_b])
+            mv_pairs.append([y_a, x_a, y_b, x_b])
 
+    print(mv_pairs)
     return mv_pairs
 
 
-def ransac(mv_pairs: List, k: int = 60, n: int = 2, thres: float = 5):
+def ransac(mv_pairs: List, k: int = 2000, n: int = 2, thres: float = 5) -> Tuple[float, float]:
 
     num_pairs = len(mv_pairs)
 
-    pairs = np.array(mv_pairs)
+    pairs = np.array(mv_pairs).astype(np.float32)
     diff = np.empty((num_pairs, 2))
 
     max_inlier = 0
-    best_mv = None
+    best_mv = (0, 0)
     for _ in range(k):
 
         samples = pairs[np.random.choice(num_pairs, n)]
@@ -195,10 +219,13 @@ def ransac(mv_pairs: List, k: int = 60, n: int = 2, thres: float = 5):
         sample_dy = np.sum(samples[:, 0] - samples[:, 2]) / n
         sample_dx = np.sum(samples[:, 1] - samples[:, 3]) / n
 
-        diff[:, 0] = np.absolute(samples[:, 2] - samples[:, 0] + sample_dy)
-        diff[:, 1] = np.absolute(samples[:, 1] - samples[:, 3] + sample_dx)
+        diff[:, 0] = np.absolute(pairs[:, 2] - pairs[:, 0] + sample_dy)
+        diff[:, 1] = np.absolute(pairs[:, 1] - pairs[:, 3] + sample_dx)
 
-        inlier_count = np.sum(np.where((diff < thres).all(axis=1)))
+        inlier_count = len(np.where((diff < thres).all(axis=1))[0])
+
+        # print((sample_dx, sample_dy), inlier_count)
+
         if inlier_count > max_inlier:
             max_inlier = inlier_count
             best_mv = (sample_dy, sample_dx)
@@ -206,7 +233,7 @@ def ransac(mv_pairs: List, k: int = 60, n: int = 2, thres: float = 5):
     return best_mv
 
 
-def blending(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]):
+def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]):
 
     channel = 0
     if len(img_a.shape) == 3:
@@ -228,8 +255,8 @@ def blending(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]):
 
     result = np.zeros((height + abs_mv_y, width + mv_x, channel), dtype=np.float64)
 
-    img_a = img_utils.x_blending(img_a, width - mv_x)
-    img_b = img_utils.x_blending(img_b, mv_x, 0)
+    img_a = img_utils.x_blending(img_a, mv_x, width)
+    img_b = img_utils.x_blending(img_b, width - mv_x, 0)
 
     if mv_y > 0:
         result[:height, :width] += img_a
@@ -241,25 +268,30 @@ def blending(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]):
     return result.astype(np.uint8)
 
 
-def msop_detect(img: np.ndarray, layer_num: int = 4, scale: int = 2, sigma_p: float = 1) -> List[List[OrientedPatch]]:
+def nms(resp_map: np.ndarray, n: int = 10) -> np.ndarray:
+    return resp_map * (maximum_filter(resp_map, n) == resp_map)
+
+
+def msop_detect(img: np.ndarray, layer_num: int = 4, scale: int = 2, sigma_p: float = 1) -> WaveletHashmap:
 
     img = img.astype(np.float64)
 
-    patches_pyramid = []
-
     img_layer = img
-    for i in range(layer_num):
+
+    patches: Dict[int, List[OrientedPatch]] = {}
+
+    for layer_idx in range(layer_num):
 
         resp_map = get_corner_resp_map(img_layer)
 
-        patches = get_oriented_patches(img_layer, resp_map)
+        resp_map = nms(resp_map, n=20)
 
-        patches_pyramid.append(patches)
+        patches[layer_idx] = get_oriented_patches(img_layer, resp_map)
 
         smoothed = gaussian_filter(img_layer, sigma_p)
         img_layer = smoothed[::scale, ::scale]
 
-    return patches_pyramid
+    return WaveletHashmap(patches)
 
 
 if __name__ == '__main__':
@@ -272,7 +304,7 @@ if __name__ == '__main__':
     img = img[:, :, 0]
     img_flipped = img[:, ::-1, 0]
 
-    blended = blending(img, img_flipped, (100, 10))
+    blended = blend_imgs(img, img_flipped, (100, 10))
 
     cv2.imshow("blended", blended)
     cv2.waitKey(0)
