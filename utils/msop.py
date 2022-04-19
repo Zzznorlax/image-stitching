@@ -73,7 +73,7 @@ class WaveletHashmap():
 
         return tuple(((hash[i] - self.lower_bounds[layer][i]) // self.steps[layer][i]) for i in range(3))
 
-    def match(self, patch: OrientedPatch, layer: int) -> Optional[int]:
+    def match(self, patch: OrientedPatch, layer: int, thres: float = 1e-4) -> Optional[int]:
         if layer not in self.patches:
             return None
 
@@ -92,7 +92,7 @@ class WaveletHashmap():
                 match_idx = idx
                 min_err = mse
 
-        if min_err == inf:
+        if min_err == inf or min_err > thres:
             return None
 
         return match_idx
@@ -199,7 +199,6 @@ def match(map_a: WaveletHashmap, map_b: WaveletHashmap):
 
             mv_pairs.append([y_a, x_a, y_b, x_b])
 
-    print(mv_pairs)
     return mv_pairs
 
 
@@ -219,17 +218,27 @@ def ransac(mv_pairs: List, k: int = 2000, n: int = 2, thres: float = 5) -> Tuple
         sample_dy = np.sum(samples[:, 0] - samples[:, 2]) / n
         sample_dx = np.sum(samples[:, 1] - samples[:, 3]) / n
 
-        diff[:, 0] = np.absolute(pairs[:, 2] - pairs[:, 0] + sample_dy)
-        diff[:, 1] = np.absolute(pairs[:, 1] - pairs[:, 3] + sample_dx)
+        diff[:, 0] = np.absolute(pairs[:, 0] - pairs[:, 2] - sample_dy)
+        diff[:, 1] = np.absolute(pairs[:, 1] - pairs[:, 3] - sample_dx)
 
-        inlier_count = len(np.where((diff < thres).all(axis=1))[0])
+        inlier_indices = np.where((diff < thres).all(axis=1))[0]
 
-        # print((sample_dx, sample_dy), inlier_count)
+        inlier_count = len(inlier_indices)
 
         if inlier_count > max_inlier:
             max_inlier = inlier_count
-            best_mv = (sample_dy, sample_dx)
 
+            inlier_mv = np.zeros((num_pairs, 2))
+            inlier_mv[:, 0] = pairs[:, 0] - pairs[:, 2]
+            inlier_mv[:, 1] = pairs[:, 1] - pairs[:, 3]
+
+            outlier_indices = np.where((inlier_mv > thres).all(axis=1))
+            inlier_mv[outlier_indices[0], :] = 0
+
+            best_mv = (float(np.average(inlier_mv[inlier_indices, 0])), float(np.average(inlier_mv[inlier_indices, 1])))
+
+    print("Max inlier: {}".format(max_inlier))
+    print("Best movement {}".format(best_mv))
     return best_mv
 
 
@@ -266,6 +275,19 @@ def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]
         result[:height, mv_x:] += img_b
 
     return result.astype(np.uint8)
+
+
+def mv_filter(img: np.ndarray, mv_pairs: List[List[int]], y_range_thres: float = 0.1) -> List[List[int]]:
+
+    height, width = img.shape[:2]
+
+    filtered = []
+    for mv_pair in mv_pairs:
+        y_a, x_a, y_b, x_b = mv_pair
+        if abs(y_a - y_b) < height * y_range_thres:
+            filtered.append(mv_pair)
+
+    return filtered
 
 
 def nms(resp_map: np.ndarray, n: int = 10) -> np.ndarray:

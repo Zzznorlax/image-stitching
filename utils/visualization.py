@@ -21,13 +21,15 @@ def show_resp(img: np.ndarray, resp_map: np.ndarray) -> np.ndarray:
 
 
 def show_matched(img_1, img_2, pos_pairs) -> np.ndarray:
-    height, width = img_1.shape[:2]
-    result = np.empty((height, width * 2, 3), dtype=np.float32)
+    height_1, width_1 = img_1.shape[:2]
+    height_2, width_2 = img_2.shape[:2]
 
-    result[:, :width] = img_1.astype(np.float32)
-    result[:, -width:] = img_2.astype(np.float32)
+    result = np.empty((max(height_1, height_2), width_1 + width_2, 3), dtype=np.float32)
+
+    result[:, :width_1] = img_1.astype(np.float32)
+    result[:, -width_2:] = img_2.astype(np.float32)
 
     for pos_pair in pos_pairs:
-        draw_line(result, (pos_pair[0], pos_pair[1]), (pos_pair[2] + width, pos_pair[3]))
+        draw_line(result, (pos_pair[1], pos_pair[0]), (pos_pair[3] + width_1, pos_pair[2]))
 
     return result.astype(np.uint8)
