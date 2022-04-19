@@ -1,3 +1,4 @@
+from typing import List
 import cv2
 import numpy as np
 
@@ -31,5 +32,25 @@ def show_matched(img_1, img_2, pos_pairs) -> np.ndarray:
 
     for pos_pair in pos_pairs:
         draw_line(result, (pos_pair[1], pos_pair[0]), (pos_pair[3] + width_1, pos_pair[2]))
+
+    return result.astype(np.uint8)
+
+
+def show_fragments(imgs: List[np.ndarray], padding: int = 10) -> np.ndarray:
+
+    result_width = 0
+    result_height = 0
+    for img in imgs:
+        h, w = img.shape[:2]
+        result_width += w + padding
+        result_height = max(result_height, h)
+
+    result = np.empty((result_height, result_width, 3)).astype(np.float32)
+
+    x = 0
+    for img in imgs:
+        h, w = img.shape[:2]
+        result[:h, x:x + w] = img.astype(np.float32)
+        x += w + padding
 
     return result.astype(np.uint8)

@@ -267,7 +267,9 @@ def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[int, int]):
     if len(img_a.shape) == 3:
         channel = img_a.shape[2]
 
-    height, width = img_a.shape[:2]
+    height_a, width_a = img_a.shape[:2]
+    height_b, width_b = img_b.shape[:2]
+
     mv_y, mv_x = mv_mat
 
     img_a = img_a.astype(np.float64)
@@ -275,19 +277,23 @@ def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[int, int]):
 
     abs_mv_y = abs(mv_y)
 
-    print(mv_mat)
-    result = np.zeros((height + abs_mv_y, width * 2 - mv_x, channel), dtype=np.float64)
+    result_width = width_a + width_b - mv_x
+    result_height = max(height_a, height_b) + abs_mv_y
+    if abs(height_a - height_b) > abs_mv_y:
+        result_height = max(height_a, height_b)
 
-    img_a = img_utils.x_blending(img_a, width - mv_x, width)
+    result = np.zeros((result_height + abs_mv_y, result_width, channel), dtype=np.float64)
+
+    img_a = img_utils.x_blending(img_a, width_a - mv_x, width_a)
     img_b = img_utils.x_blending(img_b, mv_x, 0)
 
     if mv_y > 0:
-        result[:height, :width] += img_a
-        result[abs_mv_y:, width - mv_x:] += img_b
+        result[:height_a, :width_a] += img_a
+        result[-height_b:, -width_b:] += img_b
 
     else:
-        result[abs_mv_y:, :width] += img_a
-        result[:height, width - mv_x:] += img_b
+        result[-height_a:, :width_a] += img_a
+        result[:height_b, -width_b:] += img_b
 
     return result.astype(np.uint8)
 
