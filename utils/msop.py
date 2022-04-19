@@ -202,7 +202,7 @@ def match(map_a: WaveletHashmap, map_b: WaveletHashmap):
     return mv_pairs
 
 
-def ransac(mv_pairs: List, k: int = 2000, n: int = 2, thres: float = 5) -> Tuple[float, float]:
+def ransac(mv_pairs: List, k: int = 2000, n: int = 2, diff_thres: float = 5) -> Tuple[Tuple[float, float], int]:
 
     num_pairs = len(mv_pairs)
 
@@ -221,7 +221,7 @@ def ransac(mv_pairs: List, k: int = 2000, n: int = 2, thres: float = 5) -> Tuple
         diff[:, 0] = np.absolute(pairs[:, 0] - pairs[:, 2] - sample_dy)
         diff[:, 1] = np.absolute(pairs[:, 1] - pairs[:, 3] - sample_dx)
 
-        inlier_indices = np.where((diff < thres).all(axis=1))[0]
+        inlier_indices = np.where((diff < diff_thres).all(axis=1))[0]
 
         inlier_count = len(inlier_indices)
 
@@ -232,17 +232,36 @@ def ransac(mv_pairs: List, k: int = 2000, n: int = 2, thres: float = 5) -> Tuple
             inlier_mv[:, 0] = pairs[:, 0] - pairs[:, 2]
             inlier_mv[:, 1] = pairs[:, 1] - pairs[:, 3]
 
-            outlier_indices = np.where((inlier_mv > thres).all(axis=1))
+            outlier_indices = np.where((inlier_mv > diff_thres).all(axis=1))
             inlier_mv[outlier_indices[0], :] = 0
 
             best_mv = (float(np.average(inlier_mv[inlier_indices, 0])), float(np.average(inlier_mv[inlier_indices, 1])))
 
-    print("Max inlier: {}".format(max_inlier))
-    print("Best movement {}".format(best_mv))
-    return best_mv
+    return best_mv, max_inlier
 
 
-def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]):
+def reformat_mv(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]) -> Tuple[np.ndarray, np.ndarray, Tuple[int, int]]:
+
+    img_a = img_a.astype(np.float64)
+    img_b = img_b.astype(np.float64)
+
+    mv_y, mv_x = mv_mat
+
+    rounded_mv_x = math.floor(abs(mv_x))
+    if mv_x < 0:
+        mv_y = -mv_y
+        img_a, img_b = img_b, img_a
+
+    rounded_mv_y = math.floor(abs(mv_y))
+    if mv_y < 0:
+        rounded_mv_y = -rounded_mv_y
+
+    _, width = img_a.shape[:2]
+
+    return img_a, img_b, (rounded_mv_y, width - rounded_mv_x)
+
+
+def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[int, int]):
 
     channel = 0
     if len(img_a.shape) == 3:
@@ -254,25 +273,21 @@ def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[float, float]
     img_a = img_a.astype(np.float64)
     img_b = img_b.astype(np.float64)
 
-    if mv_x < 0:
-        img_a, img_b = img_b, img_a
-        mv_x = -mv_x
-        mv_y = -mv_y
+    abs_mv_y = abs(mv_y)
 
-    mv_x = math.floor(mv_x)
-    abs_mv_y = math.floor(abs(mv_y))
+    print(mv_mat)
+    result = np.zeros((height + abs_mv_y, width * 2 - mv_x, channel), dtype=np.float64)
 
-    result = np.zeros((height + abs_mv_y, width + mv_x, channel), dtype=np.float64)
-
-    img_a = img_utils.x_blending(img_a, mv_x, width)
-    img_b = img_utils.x_blending(img_b, width - mv_x, 0)
+    img_a = img_utils.x_blending(img_a, width - mv_x, width)
+    img_b = img_utils.x_blending(img_b, mv_x, 0)
 
     if mv_y > 0:
         result[:height, :width] += img_a
-        result[abs_mv_y:, mv_x:] += img_b
+        result[abs_mv_y:, width - mv_x:] += img_b
+
     else:
         result[abs_mv_y:, :width] += img_a
-        result[:height, mv_x:] += img_b
+        result[:height, width - mv_x:] += img_b
 
     return result.astype(np.uint8)
 
