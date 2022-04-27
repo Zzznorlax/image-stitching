@@ -202,7 +202,7 @@ def match(map_a: WaveletHashmap, map_b: WaveletHashmap):
     return mv_pairs
 
 
-def ransac(mv_pairs: List, k: int = 2000, n: int = 2, diff_thres: float = 5) -> Tuple[Tuple[float, float], int]:
+def ransac(mv_pairs: List, k: int = 200, n: int = 1, diff_thres: float = 5, loop: bool = False, inlier_thres: float = 0.2) -> Tuple[Tuple[float, float], int]:
 
     num_pairs = len(mv_pairs)
 
@@ -211,7 +211,15 @@ def ransac(mv_pairs: List, k: int = 2000, n: int = 2, diff_thres: float = 5) -> 
 
     max_inlier = 0
     best_mv = (0, 0)
-    for _ in range(k):
+
+    counter = 0
+    while True:
+        if loop:
+            if max_inlier >= num_pairs * 0.2:
+                break
+
+        elif counter >= k:
+            break
 
         samples = pairs[np.random.choice(num_pairs, n)]
 
@@ -232,11 +240,14 @@ def ransac(mv_pairs: List, k: int = 2000, n: int = 2, diff_thres: float = 5) -> 
             inlier_mv[:, 0] = pairs[:, 0] - pairs[:, 2]
             inlier_mv[:, 1] = pairs[:, 1] - pairs[:, 3]
 
-            outlier_indices = np.where((inlier_mv > diff_thres).all(axis=1))
-            inlier_mv[outlier_indices[0], :] = 0
+            # print(samples)
+            # print(inlier_mv[inlier_indices])
 
             best_mv = (float(np.average(inlier_mv[inlier_indices, 0])), float(np.average(inlier_mv[inlier_indices, 1])))
 
+        counter += 1
+
+    print("Best MV {} from {} inliers".format(best_mv, max_inlier))
     return best_mv, max_inlier
 
 
@@ -282,7 +293,7 @@ def blend_imgs(img_a: np.ndarray, img_b: np.ndarray, mv_mat: Tuple[int, int]):
     if abs(height_a - height_b) > abs_mv_y:
         result_height = max(height_a, height_b)
 
-    result = np.zeros((result_height + abs_mv_y, result_width, channel), dtype=np.float64)
+    result = np.zeros((result_height, result_width, channel), dtype=np.float64)
 
     img_a = img_utils.x_blending(img_a, width_a - mv_x, width_a)
     img_b = img_utils.x_blending(img_b, mv_x, 0)

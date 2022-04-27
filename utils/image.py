@@ -3,6 +3,10 @@ import cv2
 import numpy as np
 
 
+def downscale(img: np.ndarray, scale: float = 0.5) -> np.ndarray:
+    return cv2.resize(img, (int(img.shape[1] * scale), int(img.shape[0] * scale)))
+
+
 def cylindrical_x(x: int, focal_length: float) -> float:
     return focal_length * math.atan(x / focal_length)
 
@@ -59,12 +63,16 @@ def x_blending(img: np.ndarray, start: int, end: int = -1) -> np.ndarray:
     start, end = min(start, end), max(start, end)
 
     x = np.zeros((width))
-    alpha = 1 / abs(interval)
+    alpha = min(abs(interval), width)
+
     if interval < 0:
-        x[start:end] = np.arange(start=0, stop=1, step=alpha)
+        x[start:end] = np.arange(start=0, stop=alpha)
+        x /= alpha
         x[end:] = 1
+
     else:
-        x[start:end] = np.arange(start=1, stop=0, step=-alpha)
+        x[start:end] = np.arange(start=alpha, stop=0, step=-1)
+        x /= alpha
         x[:start] = 1
 
     img = img.astype(np.float64)
@@ -98,6 +106,8 @@ def cylindrical_projection(img, focal_length):
     else:
         _, thresh = cv2.threshold(cylinder_proj, 1, 255, cv2.THRESH_BINARY)
 
+    return cylinder_proj
+
     contours = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     x, y, w, h = cv2.boundingRect(contours[0][0])
 
@@ -106,12 +116,16 @@ def cylindrical_projection(img, focal_length):
 
 if __name__ == '__main__':
 
-    filename = 'samples/0.jpeg'
-    img = cv2.imread(filename)
+    # filename = 'samples/mn_2/01.jpg'
+    # img = cv2.imread(filename)
 
-    img = img[:, :, 0]
+    # # warped_img = to_cylindrical(img, 1000)
+    # blended_img = x_blending(img, 0)
 
-    warped_img = to_cylindrical(img, 1000)
+    # cv2.imshow("warped", blended_img)
+    # cv2.waitKey(0)
 
-    cv2.imshow("warped", warped_img)
-    cv2.waitKey(0)
+    # cv2.imwrite("x_blending.jpg", blended_img)
+
+    a = np.arange(1, 0, step=-(1 / 99))
+    print(a, a.shape)
